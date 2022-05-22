@@ -1,0 +1,470 @@
+---
+title: "Home Price Prediction - Extra Credit Report"
+author: "Emmanuel Cortez"
+date: "2/13/2021"
+output:
+  word_document: default
+  html_document:
+    df_print: paged
+  pdf_document: default
+fontsize: 11pt
+geometry: margin=lin
+---
+# King County, Washington Homes Dataset
+
+```{r setup, include=FALSE}
+library(readr)
+
+King <- read.csv(file.choose('King County Home (train).csv'))
+
+KingTest <- read.csv(file.choose('King County Homes (test).csv'))
+
+library(leaps)
+library(caret)
+library(ggplot2)
+library(GGally)
+library(ggfortify)
+library(olsrr)
+library(car)
+library(Hmisc)
+library(psych)
+library(corrplot)
+library(dplyr)
+library(ISLR)
+library(MASS)
+library(bestNormalize)
+library(bestglm)
+
+options(scipen=999) # removing scientific notation
+
+```
+
+## EDA
+
+### Dataset Structure
+
+In the `King` training data set, we have 17 numeric and 4 integer variables. 16,187 observations are included here. Data type transformations were applied to specific variables that either needed to be a factor or an ordinal variable with proper levels/classes.  I will walk through tasks to build regression models through the training data for predicting estimated `price`of King County homes.
+
+```{r}
+# Training portion
+dim(King)
+str(King)
+```
+
+In the `KingTest`data set, consisting of 5,419 observations, we have the same set of variables, only, we do not have `price` as a variable since we are predicting home prices on this hold-out test set
+
+```{r}
+# Test portion
+dim(KingTest)
+str(KingTest)
+```
+
+### Data Transformations
+
+Performing data type transformations on the training and test sets.
+
+```{r Data Type Transformations}
+
+# Training - Ordinal/Ordered Factors
+King$view <- ordered(King$view)
+King$condition <- ordered(King$condition)
+King$grade <- ordered(King$grade)
+
+# Test - Ordinal/Ordered Factors
+KingTest$view <- ordered(KingTest$view)
+KingTest$condition <- ordered(KingTest$condition)
+KingTest$grade <- ordered(KingTest$grade)
+
+# Understanding the grade variable
+typeof(King$grade) # integer
+class(King$grade) # ordered factor
+
+# Transformed to Nominal/Factors
+
+# Train - Nominal/Factors
+King$zipcode <- as.factor(King$zipcode)
+King$waterfront <- as.factor(King$waterfront)
+King$renovated <- as.factor(King$renovated)
+
+# Test - Nominal/Factors
+KingTest$zipcode <- as.factor(KingTest$zipcode)
+KingTest$waterfront <- as.factor(KingTest$waterfront)
+KingTest$renovated <- as.factor(KingTest$renovated)
+
+
+# Creating new variables home_age and years_since_ren
+# ...
+
+# Confirming updates have been made
+str(King)
+str(KingTest)
+```
+
+### Descriptive Statistics
+
+Now that data types are set, we look at our general statistics. 
+
+`price`central tendency are as follows:
+--Observations (N) = $16,187$
+--mean (M) = $\$542,802$
+--Standard Deviation (SD) = $\$369,633.10$  
+
+`price` dispersion results are as follows:
+--$s^2$= $136628636911$
+--Min = $\$75,000$
+--Max = $\$7,700,00$
+--1st Quartile = $\$324,624$
+--Median (MD) = $\$451,000$
+--3rd Quartile = $\$648,876$
+--Range = $\$7,625,000$
+
+```{r}
+summary(King)
+describe(King$price)
+var(King$price)
+boxplot(King$price)
+```
+
+### Outlier Deletion
+
+One small and yet significant observation: The max number of bedrooms in the training data is 33. Possible data entry error as it does not provide a sensible home profile. We'll remove this and press forward.
+
+```{r}
+# Deleting Outlier: Observation 11884 with 33 bedrooms
+
+plot(King$price~King$bedrooms)
+
+identify(King$bedrooms, King$price, labels = King$ID)
+
+plot(King$price~King$bedrooms)
+
+summary(King[11884,])
+
+King <- as.data.frame(King[-c(11884),])
+
+plot(King$price~King$bedrooms)
+
+# Confirm deletion with the summary function
+summary(King$bedrooms)
+```
+### Frequency Bar Charts
+
+We will take a look at some frequency bar charts as we have a good amount of non-numeric data relative to the number of variables in the data set (e.g., binary and ordinal). 90% of homes have a 1 out 4 '`view` rating; 65% of homes have a 3 out 5 contruction and design `condition` score; 99% of homes do not look over the `waterfront` in the county; 96% of homes have a `renovated` status.
+
+```{r, echo = FALSE}
+# Frequency of View Rating
+view_bar <- ggplot(King, aes(x=view))+
+  geom_bar(stat="count", width=0.7,fill="tomato1")+
+  geom_text(stat="count",aes(label=after_stat(count)), vjust=-0.01)+
+  theme_minimal()+
+  ggtitle("Frequency of View Rating") +
+  xlab("View") + ylab("Count")
+
+
+# Frequency of Condition Index
+condition_bar <- ggplot(King, aes(x=condition))+
+  geom_bar(stat="count",width=0.7,fill="navajowhite4")+
+  geom_text(stat="count",aes(label=after_stat(count)),vjust=-0.01)+
+  theme_minimal()+
+  ggtitle("Frequency of Condition Index")+
+  xlab("Condition") + ylab("Count")
+
+# Frequency of Waterfront Status
+waterfront_bar <- ggplot(King,aes(x=waterfront))+
+  geom_bar(stat="count",width=0.7,fill="cyan3")+
+    geom_text(stat="count",aes(label=after_stat(count)),vjust=-0.01)+
+  theme_minimal()+
+  ggtitle("Frequency of Waterfront Status \n 0 - No | 1 - Yes")+
+  xlab("Waterfront") + ylab("Count")
+
+# Frequency of Renovated Status
+renovated_bar <- ggplot(King,aes(x=renovated))+
+  geom_bar(stat="count",width=0.7,fill="mediumpurple2")+
+  geom_text(stat="count",aes(label=after_stat(count)),vjust=-0.01)+
+  theme_minimal()+
+  ggtitle("Frequency of Renovated Status \n 0 - No | 1 - Yes")+
+  xlab("Renovated")+ylab("Count")
+
+view_bar
+condition_bar
+waterfront_bar
+renovated_bar
+```
+
+### Missing Values
+
+Covering our basis by locating potential missing values. None appear to be present
+
+```{r}
+# Side note: It is good to find that this data set does not have NA values
+
+## Training set - NA
+apply(is.na(King),2,sum)
+colSums(is.na(King))
+
+
+## Test set - NA
+apply(is.na(KingTest),2,sum)
+colSums(is.na(KingTest))
+
+```
+
+### Correlation Matrix + Distribution Charts
+
+Indexing Continuous/Discrete variables that aren't ordinal and don't have a geo-related value to create correlation matrix with distribution charts built into the visual. As we look for relationships, we see instances of potential multicollinearity among sets of variables. The more noteworthy ones include: `sqft_living`x`bathrooms` (0.759), `sqft_above`x`sqft_living` (0.876), `sqft_living15`x`sqft_living` (0.754)
+
+```{r}
+hist(King$price) # this is expected with how most houses are priced in a given DMA or county, however, we might consider transformation; we'll look at residuals in a moment
+
+# Correlation Matrix
+matrix_cols <- c(2:7,12:14,18:21)
+ggpairs(King[,matrix_cols])
+```
+
+## Project Tasks
+
+### Task 1a - Base Model - Multiple Linear Regression
+
+I will fit a base multiple linear regression model to the training data and will share any interesting findings and deficiencies.
+
+I create a a base multiple linear model `King.lm` on the `King` training set with `price` as the outcome variable and input all other variables as predictors (excluding `ID`,`zipcode`, and `lat` and `long`). While location and other geo-related variables are important, much effort in feature engineering and the complexity involved with these data will impact model performance and accuracy in my opinion; I will exclude those variables in this analysis.  
+
+`sqft_basement` displays "NA" for all linear regression outputs, hence the coefficient description that reads, "1 not defined because of singularities." This error potentially points to redundancy among `sqft_basement` and another variable
+
+```{r King.lm}
+King.lm <- lm(price~.-ID-zipcode-lat-long,data=King)
+
+#vif(King.lm) -> received error that read, "there are aliased coefficients in the model"
+
+
+alias(King.lm) # main culprits are sqft_living (+1) and sqft_above (-1); the alias function output seems to show that the nonzero values for sqft_living and sqft_above are linearly dependent on sqft_basement; this provides further evidence that sqft_basement contains perfect collinearity
+```
+
+We will remove `sqft_basement` from the base model and keep `sqft_above` and `sqft_living` for now. Now we should finally see our variance inflation factors (VIF). The VIFs for `yr_renovated` and `renovated` are very large. As we have seen in our EDA, there is reason to believe that the class imbalances within these variables can impact our model. These will be excluded from the base model.
+
+```{r}
+
+King.lm <- lm(price~.-ID-zipcode-lat-long-sqft_basement,data=King)
+
+vif(King.lm) # VIFs for yr_renovated and renovated are large
+
+King.lm <- lm(price~.-ID-zipcode-lat-long-sqft_basement-yr_renovated-renovated,data=King)
+
+summary(King.lm)
+describe(King) 
+```
+
+There is clearly a lot of skewness with certain variables. We will use log transformations, for the sake of prediction accuracy, on the following predictors: : `sqft_living`, `sqft_lot`, `sqft_living15` and `sqft_lot15`
+
+```{r}
+King.lm <- lm(price ~ bedrooms + bathrooms + log(sqft_living) + log(sqft_lot) + floors + waterfront + view + condition + grade + yr_built + lat + long + log(sqft_living15) + log(sqft_lot15),data=King)
+```
+
+### Task 1a (Continued)
+
+For further observation of the base model, I plotted the multiple linear model fit, `King.lm`, with its associated residuals. A deficiency is present here. The funnel shape of the Residuals vs Fitted plot (i.e., Scale-Location plot) is indicative of heteroscedasticity. 
+
+The goal is to generate predictions that we can trust, so I will fit another multiple linear model `KingII.lm` but take the log of the response `price`. This will become our new base model. In a residual plot of the `KingII.lm` model, the data are now with equal variance (ideal to occupy equal space above and below the red line) versus constant variance (not ideal to occupy wider space in a sparse and incremental manner). 
+
+Good to note early on that our final results (model with log of response variable predicted on test data) will need to be exponentiated for true `price` values.
+
+```{r}
+
+# Restructuring the base model for multiple linear regression
+
+KingII.lm <- lm(log(price) ~ bedrooms + bathrooms + log(sqft_living) + log(sqft_lot) + floors + waterfront + view + condition + grade + yr_built + log(sqft_living15) + log(sqft_lot15),data=King)
+
+plot(King.lm, which=1, col=c("royalblue2"))
+plot(KingII.lm, which=1, col=c("royalblue2"))
+
+# Extending residual plot visualizations
+autoplot(King.lm)
+autoplot(KingII.lm)
+```
+
+### Task 1b - Stepwise Selection
+
+I will Forward Stepwise Reduction for this analysis to find an optimal reduced model that will come from our base model (`KingII.lm`) and that will inch us closer to an effective model for predicting home `price`. I had fun naming these variables (e.g, `King.fwdleaps`, `regfit.bestsub`).
+
+#### Forward Stepwise Selection
+
+We'll create training and validation sets to help with a reduced model in forward selection.
+
+```{r}
+
+# Random seed for reproducibility
+set.seed(313)
+
+train <- sample(seq(16187),12140,replace=FALSE)
+
+```
+
+Fit the training set to forward stepwise selection.
+
+```{r}
+King.fwdleaps <- regsubsets(log(price) ~ bedrooms + bathrooms + log(sqft_living) + log(sqft_lot) + floors + waterfront + view + condition + grade + yr_built + log(sqft_living15) + log(sqft_lot15), data=King[train,], nvmax=12, method = "forward")
+
+King.fwdleaps
+```
+
+As expected, all measures like RSS, Adjusted $R^2$, BIC, and Mallow's Cp improve as more terms are added on the training set.
+
+```{r}
+freg.summary <- summary(King.fwdleaps)
+
+which.max(freg.summary$adjr2)
+which.min(freg.summary$bic)
+which.min(freg.summary$cp) 
+
+#*Knitting progress stalls on chunk 16 at 68%*
+
+```
+
+Now we must estimate test errors on the validation set of 12 models with the help of a for loop.
+
+```{r}
+
+set.seed(313)
+
+val.errors <- rep(NA,12)
+x.test <- model.matrix(log(price) ~ bedrooms + bathrooms + log(sqft_living) + log(sqft_lot) + floors + waterfront + view + condition + grade + yr_built + log(sqft_living15) + log(sqft_lot15), data=King[-train,])
+for(i in 1:12){
+  coefi <- coef(King.fwdleaps,id=i)
+  pred <- x.test[,names(coefi)]%*%coefi
+  val.errors[i] <- mean((King$price[-train]-pred)^2)# MSE
+}
+
+```
+
+Plot Prediction Error of validation set for all 12 models. We see barely any changes but it seems as though models with terms between 8 and 11 (or even less) can produce a better model than what we could muster up through the training set.
+
+The validation error plot below confirms that the model with 8 predictors is considered the most optimal within this context.
+
+```{r}
+
+min <- which.min(val.errors)
+
+min
+
+plot(val.errors,ylab="Prediction Error",pch=1,type="b")
+points(min,val.errors[min][1], col="red", cex=2, pch=20)
+```
+
+Next we find an optimal model using Adjusted-$R^2$, Mallow's Cp, BIC. From null model, to full model, forward selection recommends a model with 8 variables.
+
+
+### Task 1c - Best Subsets Regression
+
+We will fit the best 8 predictor model from Stepwise to a Best Subsets Regression but on the full data set and compare those results with the best 8 predictor model but on the training set. 
+
+We confirm best subsets on training and best subsets on full `King` data. 
+
+```{r}
+
+# Random seed for reproducibility
+set.seed(313)
+
+# Best Subsets Regression - Training with 8 max reduced base model predictors based stepwise
+regfit_best_train <- regsubsets(log(price) ~ bedrooms + bathrooms + log(sqft_living) + log(sqft_lot) + floors + waterfront + view + condition + grade + yr_built + log(sqft_living15) + log(sqft_lot15), data = King[train,], nvmax = 8)
+
+# Best Subsets Regression - Full data set with 8 max predictors
+#regfit.bestsub <- regsubsets(log(price) ~ renovated + floors + sqft_above + zipcode + lat + long + yr_renovated + bedrooms + bathrooms + log(sqft_living) + log(sqft_lot) + floors + waterfront + view + condition + grade + yr_built + log(sqft_living15) + log(sqft_lot15), data=King, nvmax=8,really.big = T)
+
+
+```
+
+We take a look at which 8 predictors in both models were selected.
+
+```{r}
+coef(regfit_best_train,8)
+#coef(regfit.bestsub,8)
+#  (Intercept)                lat 
+#     -48.001405239        1.339565873 
+#         bathrooms   log(sqft_living) 
+#       0.085108789        0.283956720 
+#        waterfront               view 
+#       0.420959811        0.064495257 
+#             grade           yr_built 
+#       0.177698615       -0.003968967 
+#log(sqft_living15) 
+#       0.193592160
+```
+
+
+### Task 1d - Cross-Validation (Split-Sample & k-Fold)
+
+Now we set up a 10 k-Fold cross-validation on using the predictors chosen from Best Subsets (`regfit.bestsub`).
+
+```{r}
+
+set.seed(313)
+# 10 k-Folds 
+tenfold.cv <- trainControl(method = "cv", number = 10)
+
+tenfold.cvfit <- train(log(price) ~ bathrooms + log(sqft_living) + lat + waterfront + view + grade + yr_built + log(sqft_living15), data=King[train,], method="lm",trControl = tenfold.cv, metric = "RMSE")
+
+summary(tenfold.cvfit)
+
+```
+Let's examine the predictions and the standard deviation of each fold's RMSE
+
+```{r}
+tenfold.cvfit$resample
+
+sd(tenfold.cvfit$resample$RMSE)
+
+```
+
+Let's run this 10-fold CV model onto our validation set. In our training set 
+
+```{r}
+cv.predict.val <- predict(tenfold.cvfit,King[-train,])
+
+King.val <- King[-train,] 
+
+model.val <- data.frame(obs = King.val$price, pred=cv.predict.val)
+
+defaultSummary(model.val)
+
+```
+### Task 2 - Home Selling Price Predictions
+
+We've come this far to aim towards a simpler model that will perform well to new, unseen data. 
+
+We fit a final linear model that we've built (indicated by `Final.lm`). We must not forget to exponentiate variables.
+
+
+```{r}
+
+Final.lm <- lm(log(price)~ bathrooms + log(sqft_living) + lat + waterfront + view + grade + yr_built + log(sqft_living15),data=King)
+
+# Ensure we take the log of relevant variables in the test set
+KingTest$sqft_living <- log(KingTest$sqft_living)
+KingTest$sqft_living15 <- log(KingTest$sqft_living15)
+
+```
+
+Now we run the final model through unseen data with `KingTest` and get a summary of the predictions
+
+```{r}
+my_pred <- predict(Final.lm, newdata=KingTest)
+
+autoplot(Final.lm)
+
+summary(exp(my_pred))
+
+submission <- data.frame(ID=KingTest$ID,ypred=exp(my_pred))
+
+write.csv(submission,file="DeppasPredictions.csv")
+```
+```{r}
+#library(rmarkdown)
+#render("Cortez_Emmanuel_Home_Prediction_Report.Rmd")
+```
+
+
+Feeback from Dr. John Garcia - 2/28/21
+Hi Emmanuel - Great job on this analysis. For future assignments, if using R Markdown, please turn in a PDF version as it takes a bit of work to get this code to run on my machine and there is a lot of waiting for the code to run for certain lines (e.g. one 372 never ran from me after waiting a long time and had to restart R), which makes it time-consuming to review.  Alternatively, you can always use a word document to document your work. Also, it is easier for me to give you feedback on a word/pdf document where I can insert comments, whereas I'm unable to do so in an RMD doc.
+
+One issue with your modeling is that yr_built and yr_renovated are factors.  You could convert those to continuous values by taking current year - yr_built to create a new variable; age or current year - yr_renovated to generate a variable "years since renovation"
+Even though the 12 variable model performs best (before your do CV), when you look at your charts (lines 313-316), you see that after 3-4 predictors, the rate of change greatly decreases.  I would choose either 3-4  as the incremental lift in performance may not be worth the increased complexity of the model.
